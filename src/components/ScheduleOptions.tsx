@@ -25,6 +25,19 @@ function gapLabel(mins: number): string {
   return `${h}h ${m}m gaps`;
 }
 
+function scoreHint(opt: ScheduleOption, mode: RankMode): string {
+  switch (mode) {
+    case "latestStart":
+    case "earliestStart":
+      return `avg start ${minutesToLabel(Math.round(opt.score.avgDayStart))}`;
+    case "earliestFinish":
+    case "latestFinish":
+      return `avg end ${minutesToLabel(Math.round(opt.score.avgDayEnd))}`;
+    default:
+      return `${opt.score.daysUsed} day${opt.score.daysUsed === 1 ? "" : "s"}`;
+  }
+}
+
 export function ScheduleOptions({
   options,
   activeIndex,
@@ -52,7 +65,7 @@ export function ScheduleOptions({
         <span className="hint">
           {totalBeforeFilter > options.length
             ? `${totalBeforeFilter} found · ${totalBeforeFilter - options.length} hidden by filters`
-            : "Pick a ranking, then choose a combination"}
+            : "Start/end ranks average each day’s first/last class"}
         </span>
       </div>
 
@@ -158,10 +171,10 @@ export function ScheduleOptions({
                   {minutesToLabel(opt.score.earliestStart)} –{" "}
                   {minutesToLabel(opt.score.latestEnd)}
                 </span>
-                <span className="option-card__stat">{gapLabel(opt.score.gaps)}</span>
                 <span className="option-card__stat">
-                  {opt.score.daysUsed} day{opt.score.daysUsed === 1 ? "" : "s"}
+                  {scoreHint(opt, prefs.rankMode)}
                 </span>
+                <span className="option-card__stat">{gapLabel(opt.score.gaps)}</span>
                 <span className="option-card__classes" title={classNbrs}>
                   Class # {classNbrs}
                 </span>
