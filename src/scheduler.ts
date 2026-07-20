@@ -56,6 +56,20 @@ export function labCatalogFromTheory(catalog: string): string {
     .join("/");
 }
 
+/** Theory course code for a lab catalog, e.g. CS/CE 232L/324L → CS/CE 232/324 */
+export function linkedTheoryCodeFor(course: Course): string | null {
+  if (course.linkedTheoryCode) return course.linkedTheoryCode;
+  if (!isLabCatalog(course.catalog)) return null;
+  return `${course.subject} ${theoryCatalogFromLab(course.catalog)}`.trim();
+}
+
+/** Lab course code for a theory catalog, e.g. CS/CE 232/324 → CS/CE 232L/324L */
+export function linkedLabCodeFor(course: Course): string | null {
+  if (course.linkedLabCode) return course.linkedLabCode;
+  if (isLabCatalog(course.catalog)) return null;
+  return `${course.subject} ${labCatalogFromTheory(course.catalog)}`.trim();
+}
+
 /**
  * Components that are matched by section number to theory
  * (lab / tutorial / recitation). Seminars (S) are free-choice.
@@ -107,11 +121,10 @@ export function normalizeCourse(course: Course): Course {
   }
 
   const isLab = course.isLab ?? isLabCatalog(course.catalog);
-  let linkedTheoryCode = course.linkedTheoryCode ?? null;
-  let linkedLabCode = course.linkedLabCode ?? null;
-  if (isLab && !linkedTheoryCode) {
-    linkedTheoryCode = `${course.subject} ${theoryCatalogFromLab(course.catalog)}`.trim();
-  }
+  // Always resolve theory parent for labs; keep explicit lab link from data when present.
+  // Convention fallback for missing lab links happens in buildUnits.
+  const linkedTheoryCode = linkedTheoryCodeFor({ ...course, isLab });
+  const linkedLabCode = course.linkedLabCode ?? (isLab ? null : linkedLabCodeFor(course));
 
   return {
     ...course,
@@ -417,35 +430,48 @@ function buildUnits(courses: Course[]): ScheduleUnit[] {
   const used = new Set<string>();
   const units: ScheduleUnit[] = [];
 
+  function partnerLab(theory: CoursePlan): CoursePlan | null {
+    const code = linkedLabCodeFor(theory.course);
+    if (code && byCode.has(code)) return byCode.get(code)!;
+    // Catalog convention fallback (handles missing linkedLabCode in older JSON)
+    const fallback = `${theory.course.subject} ${labCatalogFromTheory(theory.course.catalog)}`.trim();
+    return byCode.get(fallback) ?? null;
+  }
+
+  function partnerTheory(lab: CoursePlan): CoursePlan | null {
+    const code = linkedTheoryCodeFor(lab.course);
+    if (code && byCode.has(code)) return byCode.get(code)!;
+    const fallback = `${lab.course.subject} ${theoryCatalogFromLab(lab.course.catalog)}`.trim();
+    return byCode.get(fallback) ?? null;
+  }
+
   for (const plan of plans) {
     if (used.has(plan.course.code)) continue;
     const course = plan.course;
 
-    if (!course.isLab && course.linkedLabCode && byCode.has(course.linkedLabCode)) {
-      const lab = byCode.get(course.linkedLabCode)!;
-      used.add(course.code);
-      used.add(lab.course.code);
-      // Linked theory+lab: only matching section numbers count
-      const theoryIndexes = new Set(
-        plan.buckets.flat().map(sectionIndex).filter((n): n is number => n != null)
-      );
-      const labIndexes = new Set(
-        lab.buckets.flat().map(sectionIndex).filter((n): n is number => n != null)
-      );
-      const shared = [...theoryIndexes].filter((i) => labIndexes.has(i)).length;
-      units.push({
-        kind: "linked",
-        theory: plan,
-        lab,
-        branching: Math.max(shared, 1) * plan.branching * lab.branching,
-      });
-      continue;
-    }
-
-    if (course.isLab && course.linkedTheoryCode && byCode.has(course.linkedTheoryCode)) {
-      // Theory will claim the pair when visited; if somehow lab comes first and theory unused:
-      const theory = byCode.get(course.linkedTheoryCode)!;
-      if (!used.has(theory.course.code)) {
+    if (!course.isLab) {
+      const lab = partnerLab(plan);
+      if (lab && !used.has(lab.course.code)) {
+        used.add(course.code);
+        used.add(lab.course.code);
+        const theoryIndexes = new Set(
+          plan.buckets.flat().map(sectionIndex).filter((n): n is number => n != null)
+        );
+        const labIndexes = new Set(
+          lab.buckets.flat().map(sectionIndex).filter((n): n is number => n != null)
+        );
+        const shared = [...theoryIndexes].filter((i) => labIndexes.has(i)).length;
+        units.push({
+          kind: "linked",
+          theory: plan,
+          lab,
+          branching: Math.max(shared, 1),
+        });
+        continue;
+      }
+    } else {
+      const theory = partnerTheory(plan);
+      if (theory && !used.has(theory.course.code)) {
         used.add(course.code);
         used.add(theory.course.code);
         const theoryIndexes = new Set(
@@ -470,6 +496,23 @@ function buildUnits(courses: Course[]): ScheduleUnit[] {
   }
 
   return units.sort((a, b) => a.branching - b.branching);
+}
+
+/** True if any theory+lab pair in the picks has different section numbers (L1 with T4, etc.). */
+function hasMismatchedTheoryLab(picks: PickedSection[]): boolean {
+  const byCode = new Map(picks.map((p) => [p.course.code, p]));
+  for (const pick of picks) {
+    if (pick.course.isLab) continue;
+    const labCode =
+      linkedLabCodeFor(pick.course) ??
+      `${pick.course.subject} ${labCatalogFromTheory(pick.course.catalog)}`.trim();
+    const labPick = byCode.get(labCode);
+    if (!labPick) continue;
+    const li = sectionIndex(pick.section);
+    const ti = sectionIndex(labPick.section);
+    if (li == null || ti == null || li !== ti) return true;
+  }
+  return false;
 }
 
 /**
@@ -499,6 +542,7 @@ export function enumerateSchedules(
   let explored = 0;
 
   function save(current: PickedSection[]) {
+    if (hasMismatchedTheoryLab(current)) return;
     const classSig = optionSignature(current);
     if (seenClassSets.has(classSig)) return;
     seenClassSets.add(classSig);
@@ -578,12 +622,24 @@ export function enumerateSchedules(
       return;
     }
 
-    // Linked theory + lab: choose theory first, then lab with the same §#
+    // Linked theory + lab: Lx must pair with Tx (same section number)
     dfsComponents(unit.theory, 0, [], current, null, () => {
-      const theoryPicks = current.filter((p) => p.course.code === unit.theory.course.code);
+      const theoryPicks = current.filter(
+        (p) => p.course.code === unit.theory.course.code
+      );
       const idx = primaryIndex(theoryPicks);
       if (idx == null) return;
       dfsComponents(unit.lab, 0, [], current, idx, () => {
+        // Final guard: refuse to continue if indexes drifted
+        const labPicks = current.filter(
+          (p) => p.course.code === unit.lab.course.code
+        );
+        if (
+          labPicks.some((p) => sectionIndex(p.section) !== idx) ||
+          labPicks.length === 0
+        ) {
+          return;
+        }
         dfsUnit(unitIdx + 1, current);
       });
     });

@@ -1,5 +1,10 @@
 import type { Course } from "../types";
-import { describeRequiredComponents, normalizeCourse } from "../scheduler";
+import {
+  describeRequiredComponents,
+  linkedLabCodeFor,
+  linkedTheoryCodeFor,
+  normalizeCourse,
+} from "../scheduler";
 
 interface Props {
   courses: Course[];
@@ -8,6 +13,9 @@ interface Props {
 }
 
 export function Cart({ courses, onRemove, onClear }: Props) {
+  const normalized = courses.map(normalizeCourse);
+  const codes = new Set(normalized.map((c) => c.code));
+
   return (
     <section className="panel panel--cart">
       <div className="panel__head">
@@ -22,8 +30,12 @@ export function Cart({ courses, onRemove, onClear }: Props) {
         <p className="muted">Add courses to generate schedules.</p>
       ) : (
         <ul className="cart-list">
-          {courses.map((raw) => {
-            const c = normalizeCourse(raw);
+          {normalized.map((c) => {
+            const labCode = linkedLabCodeFor(c);
+            const theoryCode = linkedTheoryCodeFor(c);
+            const paired =
+              (!c.isLab && labCode && codes.has(labCode)) ||
+              (c.isLab && theoryCode && codes.has(theoryCode));
             return (
               <li key={c.code} className="cart-item">
                 <div>
@@ -32,6 +44,11 @@ export function Cart({ courses, onRemove, onClear }: Props) {
                   <span className="cart-item__components">
                     Needs {describeRequiredComponents(c)}
                   </span>
+                  {paired && (
+                    <span className="cart-item__components">
+                      Paired as Lx + Tx (same section #)
+                    </span>
+                  )}
                 </div>
                 <button
                   type="button"
