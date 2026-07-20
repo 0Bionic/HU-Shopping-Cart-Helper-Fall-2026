@@ -1,4 +1,5 @@
 import type { Course } from "../types";
+import { describeRequiredComponents, normalizeCourse } from "../scheduler";
 
 interface Props {
   courses: Course[];
@@ -21,22 +22,28 @@ export function Cart({ courses, onRemove, onClear }: Props) {
         <p className="muted">Add courses to generate schedules.</p>
       ) : (
         <ul className="cart-list">
-          {courses.map((c) => (
-            <li key={c.code} className="cart-item">
-              <div>
-                <strong>{c.code}</strong>
-                <span>{c.title}</span>
-              </div>
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label={`Remove ${c.code}`}
-                onClick={() => onRemove(c.code)}
-              >
-                ×
-              </button>
-            </li>
-          ))}
+          {courses.map((raw) => {
+            const c = normalizeCourse(raw);
+            return (
+              <li key={c.code} className="cart-item">
+                <div>
+                  <strong>{c.code}</strong>
+                  <span>{c.title}</span>
+                  <span className="cart-item__components">
+                    Needs {describeRequiredComponents(c)}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label={`Remove ${c.code}`}
+                  onClick={() => onRemove(c.code)}
+                >
+                  ×
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

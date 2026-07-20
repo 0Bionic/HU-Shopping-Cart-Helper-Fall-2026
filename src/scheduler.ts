@@ -1,4 +1,5 @@
 import type {
+  ComponentCode,
   Course,
   DayCode,
   Meeting,
@@ -10,6 +11,87 @@ import type {
 } from "./types";
 
 const DAY_ORDER: DayCode[] = ["M", "T", "W", "Th", "F", "S", "Su"];
+const COMPONENT_ORDER = ["L", "S", "T", "R", "D", "C"];
+
+export const COMPONENT_LABELS: Record<string, string> = {
+  L: "Lecture",
+  S: "Seminar",
+  T: "Tutorial",
+  R: "Recitation",
+  D: "Discussion",
+  C: "Combined",
+};
+
+export function componentLabel(code: ComponentCode): string {
+  return COMPONENT_LABELS[code] ?? code;
+}
+
+export function sectionComponent(section: Section): ComponentCode {
+  if (section.component) return section.component.toUpperCase();
+  const m = section.section.match(/^([A-Za-z]+)/);
+  return (m?.[1] ?? "X").toUpperCase();
+}
+
+function sortComponentKeys(keys: ComponentCode[]): ComponentCode[] {
+  return [...keys].sort((a, b) => {
+    const ia = COMPONENT_ORDER.indexOf(a);
+    const ib = COMPONENT_ORDER.indexOf(b);
+    const ka = ia === -1 ? COMPONENT_ORDER.length : ia;
+    const kb = ib === -1 ? COMPONENT_ORDER.length : ib;
+    if (ka !== kb) return ka - kb;
+    return a.localeCompare(b);
+  });
+}
+
+/** Ensure a course has components / requiredComponents even if JSON is older. */
+export function normalizeCourse(course: Course): Course {
+  if (
+    course.components &&
+    course.requiredComponents &&
+    course.requiredComponents.length > 0
+  ) {
+    const components: Record<string, Section[]> = {};
+    for (const key of Object.keys(course.components)) {
+      components[key] = uniqueByClassNbr(
+        course.components[key].map((s) => ({
+          ...s,
+          component: s.component ?? key,
+        }))
+      );
+    }
+    return {
+      ...course,
+      components,
+      requiredComponents: sortComponentKeys(Object.keys(components)),
+      sections: course.sections.map((s) => ({
+        ...s,
+        component: sectionComponent(s),
+      })),
+    };
+  }
+
+  const components: Record<string, Section[]> = {};
+  const sections = uniqueByClassNbr(
+    course.sections.map((s) => {
+      const component = sectionComponent(s);
+      return { ...s, component };
+    })
+  );
+  for (const s of sections) {
+    (components[s.component] ??= []).push(s);
+  }
+  return {
+    ...course,
+    sections,
+    components,
+    requiredComponents: sortComponentKeys(Object.keys(components)),
+  };
+}
+
+export function describeRequiredComponents(course: Course): string {
+  const normalized = normalizeCourse(course);
+  return normalized.requiredComponents.map(componentLabel).join(" + ");
+}
 
 export function formatTime(t: string): string {
   if (!t || t === "TBA") return "TBA";
@@ -148,23 +230,10 @@ function optionSignature(picks: PickedSection[]): string {
     .join("|");
 }
 
-/** Time-layout fingerprint so visually identical plans aren't listed twice. */
-function timetableSignature(picks: PickedSection[]): string {
-  const blocks: string[] = [];
-  for (const { course, section } of picks) {
-    for (const m of sectionMeetings(section)) {
-      for (const d of m.dayList) {
-        blocks.push(`${course.code}@${d}@${m.startMin}-${m.endMin}`);
-      }
-    }
-  }
-  return blocks.sort().join("|");
-}
-
-function uniqueSections(course: Course): Section[] {
+function uniqueByClassNbr(sections: Section[]): Section[] {
   const seen = new Set<string>();
   const out: Section[] = [];
-  for (const s of course.sections) {
+  for (const s of sections) {
     if (seen.has(s.classNbr)) continue;
     seen.add(s.classNbr);
     out.push(s);
@@ -172,60 +241,117 @@ function uniqueSections(course: Course): Section[] {
   return out;
 }
 
+interface CoursePlan {
+  course: Course;
+  /** One bucket per required component, already ordered. */
+  buckets: Section[][];
+  branching: number;
+}
+
+function prepareCourse(course: Course): CoursePlan {
+  const normalized = normalizeCourse(course);
+  const buckets = normalized.requiredComponents.map(
+    (key) => normalized.components[key] ?? []
+  );
+  const branching = buckets.reduce((acc, b) => acc * Math.max(b.length, 1), 1);
+  return { course: normalized, buckets, branching };
+}
+
 /**
- * Enumerate conflict-free combinations (unranked), deduped by class numbers
- * and by identical weekly layouts.
+ * Enumerate conflict-free combinations.
+ * For each course, picks exactly one section from EVERY required component
+ * (e.g. Lecture + Seminar for CORE 121), ensuring those don't overlap
+ * with each other or with other courses.
  */
 export function enumerateSchedules(
   courses: Course[],
   opts: { maxOptions?: number; maxExplored?: number } = {}
 ): ScheduleOption[] {
   const maxOptions = opts.maxOptions ?? 80;
-  const maxExplored = opts.maxExplored ?? 40000;
+  const maxExplored = opts.maxExplored ?? 80000;
 
   if (courses.length === 0) return [];
 
-  const ordered = [...courses]
-    .map((c) => ({ ...c, sections: uniqueSections(c) }))
-    .sort((a, b) => a.sections.length - b.sections.length);
+  const ordered = courses
+    .map(prepareCourse)
+    .filter((p) => p.buckets.every((b) => b.length > 0))
+    .sort((a, b) => a.branching - b.branching);
+
+  if (ordered.length !== courses.length) {
+    // A course is missing a component bucket somehow — treat as impossible.
+    return [];
+  }
 
   const results: ScheduleOption[] = [];
   const seenClassSets = new Set<string>();
-  const seenLayouts = new Set<string>();
   let explored = 0;
 
-  function dfs(idx: number, current: PickedSection[]) {
+  function save(current: PickedSection[]) {
+    const classSig = optionSignature(current);
+    if (seenClassSets.has(classSig)) return;
+    seenClassSets.add(classSig);
+    results.push({
+      id: results.length + 1,
+      rank: 0,
+      picks: [...current],
+      score: scorePicks(current),
+    });
+  }
+
+  function dfsComponents(
+    plan: CoursePlan,
+    bucketIdx: number,
+    chosen: PickedSection[],
+    current: PickedSection[],
+    nextCourse: () => void
+  ) {
     if (results.length >= maxOptions || explored >= maxExplored) return;
-    if (idx === ordered.length) {
-      const classSig = optionSignature(current);
-      if (seenClassSets.has(classSig)) return;
-      const layoutSig = timetableSignature(current);
-      if (seenLayouts.has(layoutSig)) return;
-      seenClassSets.add(classSig);
-      seenLayouts.add(layoutSig);
-      results.push({
-        id: results.length + 1,
-        rank: 0,
-        picks: [...current],
-        score: scorePicks(current),
-      });
+    if (bucketIdx === plan.buckets.length) {
+      const before = current.length;
+      for (const pick of chosen) current.push(pick);
+      nextCourse();
+      current.length = before;
       return;
     }
 
-    const course = ordered[idx];
-    for (const section of course.sections) {
+    const bucket = plan.buckets[bucketIdx];
+    for (const section of bucket) {
       explored++;
       if (explored >= maxExplored) return;
-      const conflict = current.some((p) => sectionsConflict(p.section, section));
-      if (conflict) continue;
-      current.push({ course, section });
-      dfs(idx + 1, current);
-      current.pop();
+      const conflictsOutside = current.some((p) =>
+        sectionsConflict(p.section, section)
+      );
+      if (conflictsOutside) continue;
+      const conflictsInside = chosen.some((p) =>
+        sectionsConflict(p.section, section)
+      );
+      if (conflictsInside) continue;
+
+      chosen.push({
+        course: plan.course,
+        section,
+        component: section.component,
+      });
+      dfsComponents(plan, bucketIdx + 1, chosen, current, nextCourse);
+      chosen.pop();
       if (results.length >= maxOptions) return;
     }
   }
 
-  dfs(0, []);
+  function dfsCourse(courseIdx: number, current: PickedSection[]) {
+    if (results.length >= maxOptions || explored >= maxExplored) return;
+    if (courseIdx === ordered.length) {
+      save(current);
+      return;
+    }
+
+    const plan = ordered[courseIdx];
+    dfsComponents(plan, 0, [], current, () => {
+      dfsCourse(courseIdx + 1, current);
+    });
+  }
+
+  dfsCourse(0, []);
   return results;
 }
 

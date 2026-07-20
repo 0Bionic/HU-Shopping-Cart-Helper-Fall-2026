@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { Course } from "../types";
+import { describeRequiredComponents, normalizeCourse } from "../scheduler";
 
 interface Props {
   courses: Course[];
@@ -12,13 +13,13 @@ export function CourseSearch({ courses, selectedCodes, onAdd }: Props) {
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return courses.slice(0, 40);
-    return courses
-      .filter((c) => {
-        const hay = `${c.code} ${c.title} ${c.subject}`.toLowerCase();
-        return hay.includes(q) || q.split(/\s+/).every((part) => hay.includes(part));
-      })
-      .slice(0, 60);
+    const list = q
+      ? courses.filter((c) => {
+          const hay = `${c.code} ${c.title} ${c.subject}`.toLowerCase();
+          return hay.includes(q) || q.split(/\s+/).every((part) => hay.includes(part));
+        })
+      : courses;
+    return list.slice(0, q ? 60 : 40).map(normalizeCourse);
   }, [courses, query]);
 
   return (
@@ -40,6 +41,7 @@ export function CourseSearch({ courses, selectedCodes, onAdd }: Props) {
       <ul className="course-list">
         {results.map((c) => {
           const selected = selectedCodes.includes(c.code);
+          const multi = c.requiredComponents.length > 1;
           return (
             <li key={c.code}>
               <button
@@ -51,6 +53,9 @@ export function CourseSearch({ courses, selectedCodes, onAdd }: Props) {
                 <span className="course-row__code">{c.code}</span>
                 <span className="course-row__title">{c.title}</span>
                 <span className="course-row__meta">
+                  {describeRequiredComponents(c)}
+                  {multi ? " required" : ""}
+                  {" · "}
                   {c.sections.length} section{c.sections.length === 1 ? "" : "s"}
                   {selected ? " · added" : ""}
                 </span>

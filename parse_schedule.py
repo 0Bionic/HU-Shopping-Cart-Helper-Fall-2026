@@ -189,6 +189,25 @@ def expand_days(day_str: str) -> list[str]:
             i += 1
     return days
 
+def section_component(section_code: str) -> str:
+    """Letter prefix of a section code: L1 -> L, S12 -> S, T1 -> T."""
+    m = re.match(r"^([A-Za-z]+)", section_code.strip())
+    return (m.group(1) if m else "X").upper()
+
+
+COMPONENT_ORDER = ["L", "S", "T", "R", "D", "C"]
+
+
+def sort_component_keys(keys: list[str]) -> list[str]:
+    def key_fn(k: str) -> tuple[int, str]:
+        try:
+            return (COMPONENT_ORDER.index(k), k)
+        except ValueError:
+            return (len(COMPONENT_ORDER), k)
+
+    return sorted(keys, key=key_fn)
+
+
 def day_sort_key(d: str) -> int:
     order = ["M", "T", "W", "Th", "F", "S", "Su"]
     try:
@@ -295,6 +314,7 @@ def main() -> None:
             if m["room"] and m["room"] not in rooms:
                 rooms.append(m["room"])
 
+        component = section_component(entry["section"])
         rows.append(
             {
                 "id": entry["id"],
@@ -304,6 +324,7 @@ def main() -> None:
                 "code": entry["code"],
                 "title": entry["title"],
                 "section": entry["section"],
+                "component": component,
                 "days": days_str if days_str else meetings[0]["days"],
                 "dayList": day_list,
                 "start": start,
@@ -327,23 +348,30 @@ def main() -> None:
                 "catalog": r["catalog"],
                 "title": r["title"],
                 "sections": [],
+                "components": {},
+                "requiredComponents": [],
             }
-        by_code[key]["sections"].append(
-            {
-                "id": r["id"],
-                "classNbr": r["classNbr"],
-                "section": r["section"],
-                "days": r["days"],
-                "dayList": r["dayList"],
-                "start": r["start"],
-                "end": r["end"],
-                "startMin": r["startMin"],
-                "endMin": r["endMin"],
-                "room": r["room"],
-                "instructor": r["instructor"],
-                "meetings": r["meetings"],
-            }
-        )
+        section_obj = {
+            "id": r["id"],
+            "classNbr": r["classNbr"],
+            "section": r["section"],
+            "component": r["component"],
+            "days": r["days"],
+            "dayList": r["dayList"],
+            "start": r["start"],
+            "end": r["end"],
+            "startMin": r["startMin"],
+            "endMin": r["endMin"],
+            "room": r["room"],
+            "instructor": r["instructor"],
+            "meetings": r["meetings"],
+        }
+        by_code[key]["sections"].append(section_obj)
+        comp = r["component"]
+        by_code[key]["components"].setdefault(comp, []).append(section_obj)
+
+    for course in by_code.values():
+        course["requiredComponents"] = sort_component_keys(list(course["components"].keys()))
 
     courses_list = sorted(by_code.values(), key=lambda x: x["code"])
     OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -357,14 +385,21 @@ def main() -> None:
     }
     OUT.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"Wrote {OUT} ({len(courses_list)} courses, {len(rows)} unique class numbers)")
-    # Sanity: CS 381 should be one section
     for c in courses_list:
-        if c["code"] == "CS 381":
-            print("CS 381 sections:", len(c["sections"]), json.dumps(c["sections"][0], indent=2)[:600])
+        if c["code"] == "CORE 121":
+            print(
+                "CORE 121 required:",
+                c["requiredComponents"],
+                {k: len(v) for k, v in c["components"].items()},
+            )
             break
     for c in courses_list:
-        if c["code"] == "EE/CE 100":
-            print("EE/CE 100 sections:", len(c["sections"]))
+        if c["code"] == "CORE 201":
+            print(
+                "CORE 201 required:",
+                c["requiredComponents"],
+                {k: len(v) for k, v in c["components"].items()},
+            )
             break
 
 

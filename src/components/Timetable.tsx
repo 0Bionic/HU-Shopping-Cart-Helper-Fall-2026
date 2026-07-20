@@ -3,6 +3,7 @@ import type { ScheduleOption } from "../types";
 import {
   DAY_LABELS,
   WEEKDAYS,
+  componentLabel,
   courseColor,
   formatTime,
   minutesToLabel,
@@ -131,7 +132,13 @@ export function Timetable({ option }: Props) {
       </div>
 
       <ul className="legend">
-        {option.picks.map(({ course, section }) => {
+        {[...option.picks]
+          .sort((a, b) => {
+            const byCode = a.course.code.localeCompare(b.course.code);
+            if (byCode !== 0) return byCode;
+            return a.component.localeCompare(b.component);
+          })
+          .map(({ course, section }) => {
           const meetings = sectionMeetings(section);
           const justCopied = copiedId === section.id;
           return (
@@ -142,7 +149,8 @@ export function Timetable({ option }: Props) {
               />
               <div className="legend__body">
                 <strong>
-                  #{section.classNbr} · {course.code} · {section.section}
+                  #{section.classNbr} · {course.code} ·{" "}
+                  {componentLabel(section.component)} {section.section}
                 </strong>
                 <span>{course.title}</span>
                 {meetings.map((m, i) => (

@@ -1,5 +1,8 @@
 export type DayCode = "M" | "T" | "W" | "Th" | "F" | "S" | "Su";
 
+/** Section component letter: L lecture, S seminar, T tutorial, R recitation, etc. */
+export type ComponentCode = string;
+
 export interface Meeting {
   days: string;
   dayList: DayCode[];
@@ -14,6 +17,8 @@ export interface Section {
   id: string;
   classNbr: string;
   section: string;
+  /** Letter prefix of the section code (L, S, T, …). */
+  component: ComponentCode;
   days: string;
   dayList: DayCode[];
   start: string;
@@ -31,7 +36,15 @@ export interface Course {
   subject: string;
   catalog: string;
   title: string;
+  /** Flat list of all sections (kept for search/display). */
   sections: Section[];
+  /**
+   * Sections grouped by required component type.
+   * A valid enrollment picks exactly one section from each key.
+   */
+  components: Record<ComponentCode, Section[]>;
+  /** Ordered list of required component keys, e.g. ["L","S"]. */
+  requiredComponents: ComponentCode[];
 }
 
 export interface ScheduleData {
@@ -45,6 +58,7 @@ export interface ScheduleData {
 export interface PickedSection {
   course: Course;
   section: Section;
+  component: ComponentCode;
 }
 
 export interface ScheduleOption {

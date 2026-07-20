@@ -207,6 +207,14 @@
   line-height: 1.35;
 }
 
+.cart-item__components {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--accent-deep);
+  font-weight: 600;
+  margin-top: 0.15rem;
+}
+
 .icon-btn,
 .linkish {
   border: none;

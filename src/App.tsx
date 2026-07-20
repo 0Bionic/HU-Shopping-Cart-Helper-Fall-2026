@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { Course, ScheduleData, ScheduleOption, SchedulePrefs } from "./types";
-import { enumerateSchedules, rankSchedules } from "./scheduler";
+import { enumerateSchedules, normalizeCourse, rankSchedules } from "./scheduler";
 import { CourseSearch } from "./components/CourseSearch";
 import { Cart } from "./components/Cart";
 import { ScheduleOptions } from "./components/ScheduleOptions";
@@ -29,7 +29,12 @@ export default function App() {
         if (!r.ok) throw new Error("Failed to load course data");
         return r.json();
       })
-      .then((json: ScheduleData) => setData(json))
+      .then((json: ScheduleData) => {
+        setData({
+          ...json,
+          courses: json.courses.map(normalizeCourse),
+        });
+      })
       .catch((e: Error) => setError(e.message));
   }, []);
 
@@ -96,8 +101,9 @@ export default function App() {
         <p className="eyebrow">Habib University · Term 2615</p>
         <h1>Shopping Cart Helper</h1>
         <p className="lede">
-          Pick your courses, then rank combinations by day start/end. Each option
-          shows the class numbers you need to enroll.
+          Pick your courses, then rank combinations by day start/end. Multi-part
+          courses (lecture + seminar, etc.) enroll as a full set. Each option
+          shows every class number you need.
         </p>
         <p className="meta">
           {data.courseCount} courses · {data.sectionCount} sections · {data.term}
@@ -128,8 +134,8 @@ export default function App() {
             <div className="empty empty--warn">
               <h2>No conflict-free schedules</h2>
               <p>
-                Every combination of the selected sections overlaps. Try removing a
-                course or swapping one with fewer/later sections.
+                No combination covers every required component without overlaps.
+                Try removing a course or loosening day/time filters.
               </p>
             </div>
           ) : (
