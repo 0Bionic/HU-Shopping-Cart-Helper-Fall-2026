@@ -427,13 +427,18 @@
   letter-spacing: 0.02em;
 }
 
-.timetable-wrap {
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 1rem;
-  box-shadow: var(--shadow);
-  animation: rise 0.45s ease both;
+.timetable-wrap .panel__head h2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem;
+}
+
+.timetable__avg {
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--ink-soft);
 }
 
 .timetable {

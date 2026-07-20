@@ -63,6 +63,11 @@ export function Timetable({ option }: Props) {
           Rank #{option.rank} ·{" "}
           {minutesToLabel(option.score.earliestStart)} –{" "}
           {minutesToLabel(option.score.latestEnd)}
+          <span className="timetable__avg">
+            {" "}
+            · avg day {minutesToLabel(Math.round(option.score.avgDayStart))}–
+            {minutesToLabel(Math.round(option.score.avgDayEnd))}
+          </span>
         </h2>
       </div>
 

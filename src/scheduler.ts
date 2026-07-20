@@ -223,47 +223,88 @@ function scorePicks(picks: PickedSection[]) {
   }
 
   let gaps = 0;
+  const dayStarts: number[] = [];
+  const dayEnds: number[] = [];
+
   for (const blocks of byDay.values()) {
     blocks.sort((a, b) => a.start - b.start);
+    dayStarts.push(blocks[0].start);
+    dayEnds.push(blocks[blocks.length - 1].end);
     for (let i = 1; i < blocks.length; i++) {
       const gap = blocks[i].start - blocks[i - 1].end;
       if (gap > 0) gaps += gap;
     }
   }
 
+  const daysUsed = byDay.size;
+  const sumDayStart = dayStarts.reduce((a, b) => a + b, 0);
+  const sumDayEnd = dayEnds.reduce((a, b) => a + b, 0);
+
   return {
     gaps,
-    daysUsed: byDay.size,
+    daysUsed,
     earliestStart: earliestStart === 24 * 60 ? 0 : earliestStart,
     latestEnd,
     totalMinutes,
+    avgDayStart: daysUsed ? sumDayStart / daysUsed : 0,
+    avgDayEnd: daysUsed ? sumDayEnd / daysUsed : 0,
+    sumDayStart,
+    sumDayEnd,
   };
 }
 
+/**
+ * Rank by per-day start/end scores, not a single week extreme.
+ * Primary: average across active days (so one early class doesn't dominate).
+ * Tie-break: sum across days, then gaps / week extremes.
+ */
 function compareByMode(a: ScheduleOption, b: ScheduleOption, mode: RankMode): number {
   const sa = a.score;
   const sb = b.score;
+  const eps = 0.5; // half-minute tolerance for float avgs
+
   switch (mode) {
-    case "latestStart":
+    case "latestStart": {
+      // Prefer later mornings on average across days you attend
+      if (Math.abs(sa.avgDayStart - sb.avgDayStart) > eps) {
+        return sb.avgDayStart - sa.avgDayStart;
+      }
+      if (sa.sumDayStart !== sb.sumDayStart) return sb.sumDayStart - sa.sumDayStart;
       if (sa.earliestStart !== sb.earliestStart) return sb.earliestStart - sa.earliestStart;
-      if (sa.latestEnd !== sb.latestEnd) return sa.latestEnd - sb.latestEnd;
       return sa.gaps - sb.gaps;
-    case "earliestFinish":
-      if (sa.latestEnd !== sb.latestEnd) return sa.latestEnd - sb.latestEnd;
-      if (sa.earliestStart !== sb.earliestStart) return sb.earliestStart - sa.earliestStart;
-      return sa.gaps - sb.gaps;
-    case "earliestStart":
+    }
+    case "earliestStart": {
+      if (Math.abs(sa.avgDayStart - sb.avgDayStart) > eps) {
+        return sa.avgDayStart - sb.avgDayStart;
+      }
+      if (sa.sumDayStart !== sb.sumDayStart) return sa.sumDayStart - sb.sumDayStart;
       if (sa.earliestStart !== sb.earliestStart) return sa.earliestStart - sb.earliestStart;
+      return sa.gaps - sb.gaps;
+    }
+    case "earliestFinish": {
+      if (Math.abs(sa.avgDayEnd - sb.avgDayEnd) > eps) {
+        return sa.avgDayEnd - sb.avgDayEnd;
+      }
+      if (sa.sumDayEnd !== sb.sumDayEnd) return sa.sumDayEnd - sb.sumDayEnd;
       if (sa.latestEnd !== sb.latestEnd) return sa.latestEnd - sb.latestEnd;
       return sa.gaps - sb.gaps;
-    case "latestFinish":
+    }
+    case "latestFinish": {
+      if (Math.abs(sa.avgDayEnd - sb.avgDayEnd) > eps) {
+        return sb.avgDayEnd - sa.avgDayEnd;
+      }
+      if (sa.sumDayEnd !== sb.sumDayEnd) return sb.sumDayEnd - sa.sumDayEnd;
       if (sa.latestEnd !== sb.latestEnd) return sb.latestEnd - sa.latestEnd;
-      if (sa.earliestStart !== sb.earliestStart) return sa.earliestStart - sb.earliestStart;
       return sa.gaps - sb.gaps;
+    }
     case "balanced":
     default:
       if (sa.gaps !== sb.gaps) return sa.gaps - sb.gaps;
       if (sa.daysUsed !== sb.daysUsed) return sa.daysUsed - sb.daysUsed;
+      // Mild preference for later average starts when gaps are equal
+      if (Math.abs(sa.avgDayStart - sb.avgDayStart) > eps) {
+        return sb.avgDayStart - sa.avgDayStart;
+      }
       if (sa.latestEnd !== sb.latestEnd) return sa.latestEnd - sb.latestEnd;
       return sb.earliestStart - sa.earliestStart;
   }
@@ -575,10 +616,10 @@ export const TIME_CHOICES: { label: string; value: number }[] = [
 
 export const RANK_MODE_LABELS: Record<RankMode, string> = {
   balanced: "Balanced (fewer gaps)",
-  latestStart: "Latest day start (sleep in)",
-  earliestFinish: "Earliest day end (leave early)",
-  earliestStart: "Earliest day start",
-  latestFinish: "Latest day end",
+  latestStart: "Latest day starts (avg across days)",
+  earliestFinish: "Earliest day ends (avg across days)",
+  earliestStart: "Earliest day starts (avg across days)",
+  latestFinish: "Latest day ends (avg across days)",
 };
 
 export const WEEKDAYS: DayCode[] = ["M", "T", "W", "Th", "F"];

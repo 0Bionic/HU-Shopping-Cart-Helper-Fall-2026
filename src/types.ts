@@ -76,9 +76,19 @@ export interface ScheduleOption {
   score: {
     gaps: number;
     daysUsed: number;
+    /** Earliest class of the whole week (for hard filters / display). */
     earliestStart: number;
+    /** Latest class end of the whole week. */
     latestEnd: number;
     totalMinutes: number;
+    /** Mean of each active day's first-class start (minutes). */
+    avgDayStart: number;
+    /** Mean of each active day's last-class end (minutes). */
+    avgDayEnd: number;
+    /** Sum of each day's first-class start — favors sleeping in on more days. */
+    sumDayStart: number;
+    /** Sum of each day's last-class end. */
+    sumDayEnd: number;
   };
 }
 
