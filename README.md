@@ -2,6 +2,10 @@
 
 Conflict-free Fall 2026 timetable builder for Habib University.
 
+## Live site
+
+https://0bionic.github.io/HU-Shopping-Cart-Helper-Fall-2026/
+
 ## Run locally
 
 ```bash
@@ -28,3 +32,7 @@ To re-parse after a PDF update (requires PyMuPDF on Python 3.10+):
 ```bash
 python parse_schedule.py
 ```
+
+## Deploy
+
+Pushes to `main` build and publish via GitHub Pages (see `.github/workflows/deploy.yml`).

@@ -24,7 +24,7 @@ export default function App() {
   const deferredPrefs = useDeferredValue(prefs);
 
   useEffect(() => {
-    fetch("/courses.json")
+    fetch(`${import.meta.env.BASE_URL}courses.json`)
       .then((r) => {
         if (!r.ok) throw new Error("Failed to load course data");
         return r.json();
