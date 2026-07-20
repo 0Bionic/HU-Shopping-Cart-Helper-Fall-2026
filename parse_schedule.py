@@ -195,6 +195,24 @@ def section_component(section_code: str) -> str:
     return (m.group(1) if m else "X").upper()
 
 
+def section_index(section_code: str) -> int | None:
+    m = re.search(r"(\d+)\s*$", section_code.strip())
+    return int(m.group(1)) if m else None
+
+
+def is_lab_catalog(catalog: str) -> bool:
+    """103L, 224L/272L, 202BL → lab catalogs."""
+    return any(re.search(r"L$", part.strip(), re.I) for part in catalog.split("/"))
+
+
+def theory_catalog_from_lab(catalog: str) -> str:
+    return "/".join(re.sub(r"L$", "", part.strip(), flags=re.I) for part in catalog.split("/"))
+
+
+def lab_catalog_from_theory(catalog: str) -> str:
+    return "/".join(f"{part.strip()}L" for part in catalog.split("/"))
+
+
 COMPONENT_ORDER = ["L", "S", "T", "R", "D", "C"]
 
 
@@ -315,6 +333,7 @@ def main() -> None:
                 rooms.append(m["room"])
 
         component = section_component(entry["section"])
+        idx = section_index(entry["section"])
         rows.append(
             {
                 "id": entry["id"],
@@ -325,6 +344,7 @@ def main() -> None:
                 "title": entry["title"],
                 "section": entry["section"],
                 "component": component,
+                "sectionIndex": idx,
                 "days": days_str if days_str else meetings[0]["days"],
                 "dayList": day_list,
                 "start": start,
@@ -350,12 +370,16 @@ def main() -> None:
                 "sections": [],
                 "components": {},
                 "requiredComponents": [],
+                "isLab": is_lab_catalog(r["catalog"]),
+                "linkedTheoryCode": None,
+                "linkedLabCode": None,
             }
         section_obj = {
             "id": r["id"],
             "classNbr": r["classNbr"],
             "section": r["section"],
             "component": r["component"],
+            "sectionIndex": r["sectionIndex"],
             "days": r["days"],
             "dayList": r["dayList"],
             "start": r["start"],
@@ -372,6 +396,17 @@ def main() -> None:
 
     for course in by_code.values():
         course["requiredComponents"] = sort_component_keys(list(course["components"].keys()))
+        if course["isLab"]:
+            theory_code = f"{course['subject']} {theory_catalog_from_lab(course['catalog'])}".strip()
+            if theory_code in by_code:
+                course["linkedTheoryCode"] = theory_code
+                by_code[theory_code]["linkedLabCode"] = course["code"]
+        else:
+            lab_code = f"{course['subject']} {lab_catalog_from_theory(course['catalog'])}".strip()
+            if lab_code in by_code:
+                course["linkedLabCode"] = lab_code
+                by_code[lab_code]["linkedTheoryCode"] = course["code"]
+                by_code[lab_code]["isLab"] = True
 
     courses_list = sorted(by_code.values(), key=lambda x: x["code"])
     OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -386,21 +421,15 @@ def main() -> None:
     OUT.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"Wrote {OUT} ({len(courses_list)} courses, {len(rows)} unique class numbers)")
     for c in courses_list:
-        if c["code"] == "CORE 121":
+        if c["code"] in ("CORE 103", "CORE 103L", "MATH 205", "CS/CE 224/272", "CS/CE 224L/272L"):
             print(
-                "CORE 121 required:",
+                c["code"],
+                "lab" if c["isLab"] else "theory",
+                "<->",
+                c["linkedTheoryCode"] or c["linkedLabCode"],
+                "req",
                 c["requiredComponents"],
-                {k: len(v) for k, v in c["components"].items()},
             )
-            break
-    for c in courses_list:
-        if c["code"] == "CORE 201":
-            print(
-                "CORE 201 required:",
-                c["requiredComponents"],
-                {k: len(v) for k, v in c["components"].items()},
-            )
-            break
 
 
 if __name__ == "__main__":

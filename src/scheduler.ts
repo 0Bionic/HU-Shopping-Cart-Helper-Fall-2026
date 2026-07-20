@@ -32,6 +32,39 @@ export function sectionComponent(section: Section): ComponentCode {
   return (m?.[1] ?? "X").toUpperCase();
 }
 
+export function sectionIndex(section: Section): number | null {
+  if (section.sectionIndex != null) return section.sectionIndex;
+  const m = section.section.match(/(\d+)\s*$/);
+  return m ? Number(m[1]) : null;
+}
+
+export function isLabCatalog(catalog: string): boolean {
+  return catalog.split("/").some((part) => /L$/i.test(part.trim()));
+}
+
+export function theoryCatalogFromLab(catalog: string): string {
+  return catalog
+    .split("/")
+    .map((part) => part.trim().replace(/L$/i, ""))
+    .join("/");
+}
+
+export function labCatalogFromTheory(catalog: string): string {
+  return catalog
+    .split("/")
+    .map((part) => `${part.trim()}L`)
+    .join("/");
+}
+
+/**
+ * Components that are matched by section number to theory
+ * (lab / tutorial / recitation). Seminars (S) are free-choice.
+ */
+function requiresIndexMatch(requiredComponents: ComponentCode[]): boolean {
+  if (requiredComponents.length < 2) return false;
+  return requiredComponents.some((c) => c === "T" || c === "R");
+}
+
 function sortComponentKeys(keys: ComponentCode[]): ComponentCode[] {
   return [...keys].sort((a, b) => {
     const ia = COMPONENT_ORDER.indexOf(a);
@@ -43,54 +76,67 @@ function sortComponentKeys(keys: ComponentCode[]): ComponentCode[] {
   });
 }
 
+function withSectionMeta(section: Section, fallbackComponent?: string): Section {
+  const component = (section.component ?? fallbackComponent ?? sectionComponent(section)).toUpperCase();
+  return {
+    ...section,
+    component,
+    sectionIndex: sectionIndex({ ...section, component }),
+  };
+}
+
 /** Ensure a course has components / requiredComponents even if JSON is older. */
 export function normalizeCourse(course: Course): Course {
-  if (
-    course.components &&
-    course.requiredComponents &&
-    course.requiredComponents.length > 0
-  ) {
-    const components: Record<string, Section[]> = {};
+  const components: Record<string, Section[]> = {};
+  let sections: Section[];
+
+  if (course.components && Object.keys(course.components).length > 0) {
     for (const key of Object.keys(course.components)) {
       components[key] = uniqueByClassNbr(
-        course.components[key].map((s) => ({
-          ...s,
-          component: s.component ?? key,
-        }))
+        course.components[key].map((s) => withSectionMeta(s, key))
       );
     }
-    return {
-      ...course,
-      components,
-      requiredComponents: sortComponentKeys(Object.keys(components)),
-      sections: course.sections.map((s) => ({
-        ...s,
-        component: sectionComponent(s),
-      })),
-    };
+    sections = uniqueByClassNbr(
+      course.sections.map((s) => withSectionMeta(s))
+    );
+  } else {
+    sections = uniqueByClassNbr(course.sections.map((s) => withSectionMeta(s)));
+    for (const s of sections) {
+      (components[s.component] ??= []).push(s);
+    }
   }
 
-  const components: Record<string, Section[]> = {};
-  const sections = uniqueByClassNbr(
-    course.sections.map((s) => {
-      const component = sectionComponent(s);
-      return { ...s, component };
-    })
-  );
-  for (const s of sections) {
-    (components[s.component] ??= []).push(s);
+  const isLab = course.isLab ?? isLabCatalog(course.catalog);
+  let linkedTheoryCode = course.linkedTheoryCode ?? null;
+  let linkedLabCode = course.linkedLabCode ?? null;
+  if (isLab && !linkedTheoryCode) {
+    linkedTheoryCode = `${course.subject} ${theoryCatalogFromLab(course.catalog)}`.trim();
   }
+
   return {
     ...course,
     sections,
     components,
     requiredComponents: sortComponentKeys(Object.keys(components)),
+    isLab,
+    linkedTheoryCode,
+    linkedLabCode,
   };
 }
 
 export function describeRequiredComponents(course: Course): string {
   const normalized = normalizeCourse(course);
-  return normalized.requiredComponents.map(componentLabel).join(" + ");
+  const base = normalized.requiredComponents.map(componentLabel).join(" + ");
+  if (normalized.isLab && normalized.linkedTheoryCode) {
+    return `${base} (same # as ${normalized.linkedTheoryCode})`;
+  }
+  if (!normalized.isLab && normalized.linkedLabCode) {
+    return `${base} (same # as ${normalized.linkedLabCode})`;
+  }
+  if (requiresIndexMatch(normalized.requiredComponents)) {
+    return `${base} (matching section #)`;
+  }
+  return base;
 }
 
 export function formatTime(t: string): string {
@@ -246,22 +292,101 @@ interface CoursePlan {
   /** One bucket per required component, already ordered. */
   buckets: Section[][];
   branching: number;
+  matchIndex: boolean;
 }
+
+type ScheduleUnit =
+  | { kind: "single"; plan: CoursePlan; branching: number }
+  | { kind: "linked"; theory: CoursePlan; lab: CoursePlan; branching: number };
 
 function prepareCourse(course: Course): CoursePlan {
   const normalized = normalizeCourse(course);
   const buckets = normalized.requiredComponents.map(
     (key) => normalized.components[key] ?? []
   );
-  const branching = buckets.reduce((acc, b) => acc * Math.max(b.length, 1), 1);
-  return { course: normalized, buckets, branching };
+  const matchIndex = requiresIndexMatch(normalized.requiredComponents);
+  let branching = 1;
+  if (matchIndex) {
+    const indexSets = buckets.map(
+      (b) => new Set(b.map(sectionIndex).filter((n): n is number => n != null))
+    );
+    const first = indexSets[0] ?? new Set<number>();
+    const shared = [...first].filter((idx) =>
+      indexSets.every((set) => set.has(idx))
+    );
+    branching = Math.max(shared.length, 1);
+  } else {
+    branching = buckets.reduce((acc, b) => acc * Math.max(b.length, 1), 1);
+  }
+  return { course: normalized, buckets, branching, matchIndex };
+}
+
+function buildUnits(courses: Course[]): ScheduleUnit[] {
+  const plans = courses.map(prepareCourse);
+  const byCode = new Map(plans.map((p) => [p.course.code, p]));
+  const used = new Set<string>();
+  const units: ScheduleUnit[] = [];
+
+  for (const plan of plans) {
+    if (used.has(plan.course.code)) continue;
+    const course = plan.course;
+
+    if (!course.isLab && course.linkedLabCode && byCode.has(course.linkedLabCode)) {
+      const lab = byCode.get(course.linkedLabCode)!;
+      used.add(course.code);
+      used.add(lab.course.code);
+      // Linked theory+lab: only matching section numbers count
+      const theoryIndexes = new Set(
+        plan.buckets.flat().map(sectionIndex).filter((n): n is number => n != null)
+      );
+      const labIndexes = new Set(
+        lab.buckets.flat().map(sectionIndex).filter((n): n is number => n != null)
+      );
+      const shared = [...theoryIndexes].filter((i) => labIndexes.has(i)).length;
+      units.push({
+        kind: "linked",
+        theory: plan,
+        lab,
+        branching: Math.max(shared, 1) * plan.branching * lab.branching,
+      });
+      continue;
+    }
+
+    if (course.isLab && course.linkedTheoryCode && byCode.has(course.linkedTheoryCode)) {
+      // Theory will claim the pair when visited; if somehow lab comes first and theory unused:
+      const theory = byCode.get(course.linkedTheoryCode)!;
+      if (!used.has(theory.course.code)) {
+        used.add(course.code);
+        used.add(theory.course.code);
+        const theoryIndexes = new Set(
+          theory.buckets.flat().map(sectionIndex).filter((n): n is number => n != null)
+        );
+        const labIndexes = new Set(
+          plan.buckets.flat().map(sectionIndex).filter((n): n is number => n != null)
+        );
+        const shared = [...theoryIndexes].filter((i) => labIndexes.has(i)).length;
+        units.push({
+          kind: "linked",
+          theory,
+          lab: plan,
+          branching: Math.max(shared, 1),
+        });
+        continue;
+      }
+    }
+
+    used.add(course.code);
+    units.push({ kind: "single", plan, branching: plan.branching });
+  }
+
+  return units.sort((a, b) => a.branching - b.branching);
 }
 
 /**
  * Enumerate conflict-free combinations.
- * For each course, picks exactly one section from EVERY required component
- * (e.g. Lecture + Seminar for CORE 121), ensuring those don't overlap
- * with each other or with other courses.
+ * - Picks one section from every required component of each course.
+ * - Lecture/recitation/lab components with matching numbers stay paired (L2↔R2, L3↔T3).
+ * - Linked theory + lab courses (CORE 103 + CORE 103L) must share the same section #.
  */
 export function enumerateSchedules(
   courses: Course[],
@@ -272,15 +397,12 @@ export function enumerateSchedules(
 
   if (courses.length === 0) return [];
 
-  const ordered = courses
-    .map(prepareCourse)
-    .filter((p) => p.buckets.every((b) => b.length > 0))
-    .sort((a, b) => a.branching - b.branching);
-
-  if (ordered.length !== courses.length) {
-    // A course is missing a component bucket somehow — treat as impossible.
-    return [];
-  }
+  const units = buildUnits(courses);
+  const plannedCount = units.reduce(
+    (n, u) => n + (u.kind === "linked" ? 2 : 1),
+    0
+  );
+  if (plannedCount !== courses.length) return [];
 
   const results: ScheduleOption[] = [];
   const seenClassSets = new Set<string>();
@@ -303,55 +425,81 @@ export function enumerateSchedules(
     bucketIdx: number,
     chosen: PickedSection[],
     current: PickedSection[],
-    nextCourse: () => void
+    forcedIndex: number | null,
+    next: () => void
   ) {
     if (results.length >= maxOptions || explored >= maxExplored) return;
     if (bucketIdx === plan.buckets.length) {
       const before = current.length;
       for (const pick of chosen) current.push(pick);
-      nextCourse();
+      next();
       current.length = before;
       return;
     }
 
-    const bucket = plan.buckets[bucketIdx];
-    for (const section of bucket) {
+    const lockIndex =
+      forcedIndex ??
+      (plan.matchIndex && chosen.length > 0
+        ? sectionIndex(chosen[0].section)
+        : null);
+
+    for (const section of plan.buckets[bucketIdx]) {
       explored++;
       if (explored >= maxExplored) return;
-      const conflictsOutside = current.some((p) =>
-        sectionsConflict(p.section, section)
-      );
-      if (conflictsOutside) continue;
-      const conflictsInside = chosen.some((p) =>
-        sectionsConflict(p.section, section)
-      );
-      if (conflictsInside) continue;
+
+      const idx = sectionIndex(section);
+      if (lockIndex != null && idx !== lockIndex) continue;
+
+      if (current.some((p) => sectionsConflict(p.section, section))) continue;
+      if (chosen.some((p) => sectionsConflict(p.section, section))) continue;
 
       chosen.push({
         course: plan.course,
         section,
         component: section.component,
       });
-      dfsComponents(plan, bucketIdx + 1, chosen, current, nextCourse);
+      dfsComponents(plan, bucketIdx + 1, chosen, current, forcedIndex, next);
       chosen.pop();
       if (results.length >= maxOptions) return;
     }
   }
 
-  function dfsCourse(courseIdx: number, current: PickedSection[]) {
+  function primaryIndex(picks: PickedSection[]): number | null {
+    const prefer = ["L", "D", "C", "S", "R", "T"];
+    for (const comp of prefer) {
+      const hit = picks.find((p) => p.component === comp);
+      if (hit) return sectionIndex(hit.section);
+    }
+    return picks.length ? sectionIndex(picks[0].section) : null;
+  }
+
+  function dfsUnit(unitIdx: number, current: PickedSection[]) {
     if (results.length >= maxOptions || explored >= maxExplored) return;
-    if (courseIdx === ordered.length) {
+    if (unitIdx === units.length) {
       save(current);
       return;
     }
 
-    const plan = ordered[courseIdx];
-    dfsComponents(plan, 0, [], current, () => {
-      dfsCourse(courseIdx + 1, current);
+    const unit = units[unitIdx];
+    if (unit.kind === "single") {
+      dfsComponents(unit.plan, 0, [], current, null, () => {
+        dfsUnit(unitIdx + 1, current);
+      });
+      return;
+    }
+
+    // Linked theory + lab: choose theory first, then lab with the same §#
+    dfsComponents(unit.theory, 0, [], current, null, () => {
+      const theoryPicks = current.filter((p) => p.course.code === unit.theory.course.code);
+      const idx = primaryIndex(theoryPicks);
+      if (idx == null) return;
+      dfsComponents(unit.lab, 0, [], current, idx, () => {
+        dfsUnit(unitIdx + 1, current);
+      });
     });
   }
 
-  dfsCourse(0, []);
+  dfsUnit(0, []);
   return results;
 }
 

@@ -19,6 +19,8 @@ export interface Section {
   section: string;
   /** Letter prefix of the section code (L, S, T, …). */
   component: ComponentCode;
+  /** Numeric suffix of the section code (L3 → 3, T10 → 10). */
+  sectionIndex: number | null;
   days: string;
   dayList: DayCode[];
   start: string;
@@ -45,6 +47,12 @@ export interface Course {
   components: Record<ComponentCode, Section[]>;
   /** Ordered list of required component keys, e.g. ["L","S"]. */
   requiredComponents: ComponentCode[];
+  /** True when this catalog is a lab course (e.g. 103L, 224L/272L). */
+  isLab?: boolean;
+  /** Linked theory course code when this is a lab, e.g. CORE 103. */
+  linkedTheoryCode?: string | null;
+  /** Linked lab course code when this is theory, e.g. CORE 103L. */
+  linkedLabCode?: string | null;
 }
 
 export interface ScheduleData {
