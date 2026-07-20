@@ -225,20 +225,55 @@ function scorePicks(picks: PickedSection[]) {
   let gaps = 0;
   const dayStarts: number[] = [];
   const dayEnds: number[] = [];
+  const dayGaps: number[] = [];
+  const daySpans: number[] = [];
 
   for (const blocks of byDay.values()) {
     blocks.sort((a, b) => a.start - b.start);
-    dayStarts.push(blocks[0].start);
-    dayEnds.push(blocks[blocks.length - 1].end);
+    const dayStart = blocks[0].start;
+    const dayEnd = blocks[blocks.length - 1].end;
+    dayStarts.push(dayStart);
+    dayEnds.push(dayEnd);
+    daySpans.push(dayEnd - dayStart);
+
+    let dayGap = 0;
     for (let i = 1; i < blocks.length; i++) {
       const gap = blocks[i].start - blocks[i - 1].end;
-      if (gap > 0) gaps += gap;
+      if (gap > 0) {
+        gaps += gap;
+        dayGap += gap;
+      }
     }
+    dayGaps.push(dayGap);
   }
 
   const daysUsed = byDay.size;
   const sumDayStart = dayStarts.reduce((a, b) => a + b, 0);
   const sumDayEnd = dayEnds.reduce((a, b) => a + b, 0);
+  const avgDayStart = daysUsed ? sumDayStart / daysUsed : 0;
+  const avgDayEnd = daysUsed ? sumDayEnd / daysUsed : 0;
+  const avgGapsPerDay = daysUsed ? gaps / daysUsed : 0;
+  const avgDaySpan = daysUsed
+    ? daySpans.reduce((a, b) => a + b, 0) / daysUsed
+    : 0;
+  const dayStartVariance = daysUsed
+    ? dayStarts.reduce((acc, s) => acc + (s - avgDayStart) ** 2, 0) / daysUsed
+    : 0;
+
+  // Soft ideals for a “nice” Habib day (used only by balanced ranking)
+  const IDEAL_DAY_START = 10 * 60; // 10:00 AM
+  const IDEAL_DAY_END = 17 * 60; // 5:00 PM
+
+  // Lower is better: per-day gaps, compact campus time, fewer days,
+  // later average starts, earlier average ends, consistent mornings.
+  const balanceScore =
+    avgGapsPerDay * 1.5 +
+    gaps * 0.35 +
+    avgDaySpan * 0.2 +
+    daysUsed * 40 +
+    Math.max(0, IDEAL_DAY_START - avgDayStart) * 0.8 +
+    Math.max(0, avgDayEnd - IDEAL_DAY_END) * 0.55 +
+    Math.sqrt(dayStartVariance) * 0.4;
 
   return {
     gaps,
@@ -246,10 +281,14 @@ function scorePicks(picks: PickedSection[]) {
     earliestStart: earliestStart === 24 * 60 ? 0 : earliestStart,
     latestEnd,
     totalMinutes,
-    avgDayStart: daysUsed ? sumDayStart / daysUsed : 0,
-    avgDayEnd: daysUsed ? sumDayEnd / daysUsed : 0,
+    avgDayStart,
+    avgDayEnd,
     sumDayStart,
     sumDayEnd,
+    avgGapsPerDay,
+    avgDaySpan,
+    dayStartVariance,
+    balanceScore,
   };
 }
 
@@ -265,7 +304,6 @@ function compareByMode(a: ScheduleOption, b: ScheduleOption, mode: RankMode): nu
 
   switch (mode) {
     case "latestStart": {
-      // Prefer later mornings on average across days you attend
       if (Math.abs(sa.avgDayStart - sb.avgDayStart) > eps) {
         return sb.avgDayStart - sa.avgDayStart;
       }
@@ -298,15 +336,26 @@ function compareByMode(a: ScheduleOption, b: ScheduleOption, mode: RankMode): nu
       return sa.gaps - sb.gaps;
     }
     case "balanced":
-    default:
-      if (sa.gaps !== sb.gaps) return sa.gaps - sb.gaps;
+    default: {
+      // Composite per-day score (lower better), then finer tie-breaks
+      if (Math.abs(sa.balanceScore - sb.balanceScore) > 0.25) {
+        return sa.balanceScore - sb.balanceScore;
+      }
+      if (Math.abs(sa.avgGapsPerDay - sb.avgGapsPerDay) > eps) {
+        return sa.avgGapsPerDay - sb.avgGapsPerDay;
+      }
+      if (Math.abs(sa.avgDaySpan - sb.avgDaySpan) > eps) {
+        return sa.avgDaySpan - sb.avgDaySpan;
+      }
       if (sa.daysUsed !== sb.daysUsed) return sa.daysUsed - sb.daysUsed;
-      // Mild preference for later average starts when gaps are equal
       if (Math.abs(sa.avgDayStart - sb.avgDayStart) > eps) {
         return sb.avgDayStart - sa.avgDayStart;
       }
-      if (sa.latestEnd !== sb.latestEnd) return sa.latestEnd - sb.latestEnd;
-      return sb.earliestStart - sa.earliestStart;
+      if (Math.abs(sa.avgDayEnd - sb.avgDayEnd) > eps) {
+        return sa.avgDayEnd - sb.avgDayEnd;
+      }
+      return sa.gaps - sb.gaps;
+    }
   }
 }
 
@@ -615,7 +664,7 @@ export const TIME_CHOICES: { label: string; value: number }[] = [
 ];
 
 export const RANK_MODE_LABELS: Record<RankMode, string> = {
-  balanced: "Balanced (fewer gaps)",
+  balanced: "Balanced (per-day gaps, compact days, hours)",
   latestStart: "Latest day starts (avg across days)",
   earliestFinish: "Earliest day ends (avg across days)",
   earliestStart: "Earliest day starts (avg across days)",

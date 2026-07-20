@@ -33,8 +33,14 @@ function scoreHint(opt: ScheduleOption, mode: RankMode): string {
     case "earliestFinish":
     case "latestFinish":
       return `avg end ${minutesToLabel(Math.round(opt.score.avgDayEnd))}`;
-    default:
-      return `${opt.score.daysUsed} day${opt.score.daysUsed === 1 ? "" : "s"}`;
+    case "balanced":
+    default: {
+      const gapPart =
+        opt.score.avgGapsPerDay < 1
+          ? "no avg gaps"
+          : `avg ${Math.round(opt.score.avgGapsPerDay)}m gaps/day`;
+      return `${gapPart} · span ${Math.round(opt.score.avgDaySpan / 60)}h`;
+    }
   }
 }
 
@@ -65,7 +71,7 @@ export function ScheduleOptions({
         <span className="hint">
           {totalBeforeFilter > options.length
             ? `${totalBeforeFilter} found · ${totalBeforeFilter - options.length} hidden by filters`
-            : "Start/end ranks average each day’s first/last class"}
+            : "Balanced ranks per-day gaps, compact days, and hours"}
         </span>
       </div>
 

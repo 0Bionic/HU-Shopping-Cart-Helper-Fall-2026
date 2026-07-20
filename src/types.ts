@@ -89,6 +89,17 @@ export interface ScheduleOption {
     sumDayStart: number;
     /** Sum of each day's last-class end. */
     sumDayEnd: number;
+    /** Mean idle gap minutes per active day. */
+    avgGapsPerDay: number;
+    /** Mean first-to-last span of each active day. */
+    avgDaySpan: number;
+    /** Variance of per-day start times (consistency). */
+    dayStartVariance: number;
+    /**
+     * Composite “balanced” cost — lower is better.
+     * Mixes per-day gaps, compact days, later starts, earlier ends, consistency.
+     */
+    balanceScore: number;
   };
 }
 
